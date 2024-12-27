@@ -175,3 +175,61 @@
 
         (var-set total-verifications (+ (var-get total-verifications) u1))
         (ok true)))
+
+
+(define-public (revoke-identity
+    (identity-hash (buff 32)))
+    (let
+        ((identity (unwrap! (map-get? Identities {identity-hash: identity-hash}) ERR-NO-IDENTITY))
+         (sender tx-sender))
+
+        ;; Verify ownership
+        (asserts! (or 
+            (is-eq sender (get owner identity))
+            (is-eq sender CONTRACT-OWNER)) ERR-UNAUTHORIZED)
+
+        ;; Update identity status
+        (map-set Identities
+            { identity-hash: identity-hash }
+            (merge identity {
+                status: STATUS-REVOKED,
+                revocation-height: (some stacks-block-height)
+            }))
+
+        (ok true)))
+
+;; Verifier Management
+(define-public (register-verifier
+    (verifier principal)
+    (allowed-types (list 10 uint)))
+    (begin
+        (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-UNAUTHORIZED)
+
+        (map-set Verifiers
+            { verifier: verifier }
+            {
+                allowed-types: allowed-types,
+                verifications-performed: u0,
+                last-verification: u0,
+                is-active: true
+            })
+        (ok true)))
+
+;; Read-only functions
+(define-read-only (get-identity-info (identity-hash (buff 32)))
+    (map-get? Identities {identity-hash: identity-hash}))
+
+(define-read-only (get-proof-info (proof-hash (buff 32)))
+    (map-get? ProofRegistry {proof-hash: proof-hash}))
+
+(define-read-only (get-verifier-info (verifier principal))
+    (map-get? Verifiers {verifier: verifier}))
+
+(define-read-only (is-identity-valid
+    (identity-hash (buff 32))
+    (verification-type uint))
+    (let ((identity (unwrap! (map-get? Identities {identity-hash: identity-hash}) false)))
+        (and
+            (is-eq (get status identity) STATUS-ACTIVE)
+            (< stacks-block-height (get expiry-height identity))
+            (is-some (index-of (get verification-types identity) verification-type)))))
