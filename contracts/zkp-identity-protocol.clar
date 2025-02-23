@@ -302,3 +302,103 @@
         (if (is-eq verification-type u0)
             ERR-INVALID-PROOF
             (ok true))))
+
+
+;; Function 1: Update verification types for an identity
+(define-public (update-verification-types
+    (identity-hash (buff 32))
+    (new-verification-types (list 10 uint)))
+    (let
+        ((identity (unwrap! (map-get? Identities {identity-hash: identity-hash}) ERR-NO-IDENTITY))
+         (sender tx-sender))
+
+        ;; Verify ownership
+        (asserts! (is-eq (get owner identity) sender) ERR-UNAUTHORIZED)
+        (asserts! (is-eq (get status identity) STATUS-ACTIVE) ERR-REVOKED)
+        (asserts! (< stacks-block-height (get expiry-height identity)) ERR-EXPIRED)
+
+        ;; Update verification types
+        (map-set Identities
+            { identity-hash: identity-hash }
+            (merge identity {
+                verification-types: new-verification-types
+            }))
+
+        (ok true)))
+
+;; Function 2: Extend identity expiry
+(define-public (extend-identity-expiry
+    (identity-hash (buff 32))
+    (additional-blocks uint))
+    (let
+        ((identity (unwrap! (map-get? Identities {identity-hash: identity-hash}) ERR-NO-IDENTITY))
+         (sender tx-sender))
+
+        ;; Verify ownership and status
+        (asserts! (is-eq (get owner identity) sender) ERR-UNAUTHORIZED)
+        (asserts! (is-eq (get status identity) STATUS-ACTIVE) ERR-REVOKED)
+
+        ;; Update expiry
+        (map-set Identities
+            { identity-hash: identity-hash }
+            (merge identity {
+                expiry-height: (+ (get expiry-height identity) additional-blocks)
+            }))
+
+        (ok true)))
+
+
+
+;; Read-only function to get verification history
+(define-read-only (get-verification-history 
+    (identity-hash (buff 32)))
+    (map-get? VerificationHistory { identity-hash: identity-hash }))
+
+;; Modified verify-proof-with-tracking to include history
+(define-public (verify-proof-with-tracking
+    (identity-hash (buff 32))
+    (proof-hash (buff 32))
+    (verification-type uint))
+    (let
+        ((identity (unwrap! (map-get? Identities {identity-hash: identity-hash}) ERR-NO-IDENTITY))
+         (proof (unwrap! (map-get? ProofRegistry {proof-hash: proof-hash}) ERR-INVALID-PROOF))
+         (verifier (unwrap! (map-get? Verifiers {verifier: tx-sender}) ERR-UNAUTHORIZED)))
+
+        ;; Verify proof validity
+        (asserts! (get is-valid proof) ERR-VERIFICATION-FAILED)
+        (asserts! (< stacks-block-height (get expiry-height proof)) ERR-EXPIRED)
+        (asserts! (is-eq (get verification-type proof) verification-type) ERR-INVALID-PROOF)
+
+        ;; Verify verifier authorization
+        (asserts! (get is-active verifier) ERR-UNAUTHORIZED)
+        (asserts! (is-some (index-of (get allowed-types verifier) verification-type)) ERR-INVALID-VERIFIER)
+
+        ;; Update verification history - handle potential errors
+        (try! (update-verification-history identity-hash verification-type))
+
+        ;; Track verification in contract
+        (map-set Verifiers
+            { verifier: tx-sender }
+            (merge verifier {
+                verifications-performed: (+ (get verifications-performed verifier) u1),
+                last-verification: stacks-block-height
+            }))
+
+        (ok true)))
+
+;; Get verification count for specific type
+(define-read-only (get-verification-count-by-type
+    (identity-hash (buff 32))
+    (verification-type uint))
+    (let
+        ((history (unwrap! (map-get? VerificationHistory { identity-hash: identity-hash }) ERR-NO-IDENTITY)))
+
+        (ok (if (is-eq verification-type TYPE-KYC)
+            (get type1-count history)
+            (if (is-eq verification-type TYPE-AGE)
+                (get type2-count history)
+                (if (is-eq verification-type TYPE-LOCATION)
+                    (get type3-count history)
+                    (if (is-eq verification-type TYPE-ACCREDITED)
+                        (get type4-count history)
+                        u0)))))))
