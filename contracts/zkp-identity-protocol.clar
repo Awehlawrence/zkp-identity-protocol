@@ -233,3 +233,72 @@
             (is-eq (get status identity) STATUS-ACTIVE)
             (< stacks-block-height (get expiry-height identity))
             (is-some (index-of (get verification-types identity) verification-type)))))
+
+
+
+;; Data map for verification history
+(define-map VerificationHistory
+    { identity-hash: (buff 32) }
+    {
+        total-verifications: uint,
+        last-verification-height: uint,
+        type1-count: uint,
+        type2-count: uint,
+        type3-count: uint,
+        type4-count: uint,
+        last-verifier: (optional principal)
+    }
+)
+
+;; Update verification history after successful verification
+(define-private (update-verification-history 
+    (identity-hash (buff 32))
+    (verification-type uint))
+    (let
+        ((current-history (default-to
+            {
+                total-verifications: u0,
+                last-verification-height: u0,
+                type1-count: u0,
+                type2-count: u0,
+                type3-count: u0,
+                type4-count: u0,
+                last-verifier: none
+            }
+            (map-get? VerificationHistory { identity-hash: identity-hash })))
+         (updated-type-count 
+            (if (is-eq verification-type TYPE-KYC)
+                (+ (get type1-count current-history) u1)
+                (if (is-eq verification-type TYPE-AGE)
+                    (+ (get type2-count current-history) u1)
+                    (if (is-eq verification-type TYPE-LOCATION)
+                        (+ (get type3-count current-history) u1)
+                        (if (is-eq verification-type TYPE-ACCREDITED)
+                            (+ (get type4-count current-history) u1)
+                            u0))))))
+
+        ;; Update the history with new counts
+        (map-set VerificationHistory
+            { identity-hash: identity-hash }
+            {
+                total-verifications: (+ (get total-verifications current-history) u1),
+                last-verification-height: stacks-block-height,
+                type1-count: (if (is-eq verification-type TYPE-KYC) 
+                               updated-type-count 
+                               (get type1-count current-history)),
+                type2-count: (if (is-eq verification-type TYPE-AGE) 
+                               updated-type-count 
+                               (get type2-count current-history)),
+                type3-count: (if (is-eq verification-type TYPE-LOCATION) 
+                               updated-type-count 
+                               (get type3-count current-history)),
+                type4-count: (if (is-eq verification-type TYPE-ACCREDITED) 
+                               updated-type-count 
+                               (get type4-count current-history)),
+                last-verifier: (some tx-sender)
+            })
+
+        ;; Return specific error types to match public function
+        (if (is-eq verification-type u0)
+            ERR-INVALID-PROOF
+            (ok true))))
